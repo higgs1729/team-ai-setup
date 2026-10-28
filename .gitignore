@@ -1,0 +1,8 @@
+# 秘密の置き場(API キーの控えなど)
+api keys.txt
+*keys*.txt
+*.key
+*.pem
+.env
+.env.*
+secrets/
