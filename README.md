@@ -12,7 +12,8 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/hig
 
 `%USERPROFILE%\team-ai-setup` に `setup.ps1` / `setup.cmd` / `remove.cmd` が置かれ、セットアップが始まる。
 
-- Claude アプリが無ければ入れる。自動で取ってこられないときはダウンロードのページが開くので、Windows 版を落として入れ、画面に戻って Enter を押す
+- Claude アプリが無ければ winget で入れる(管理者権限は要らない)。入る版は古いが、開くと自動で更新される
+- winget が無いか失敗したときは、ブラウザでインストーラのダウンロードが始まる。落ちたファイルを開いて入れ、画面に戻って Enter を押す
 - 配られた API キーを貼ると、使えるキーか確かめてからクリップボードにコピーし、アプリを開く
 - キーはファイル・環境変数・レジストリには書かない。アプリの中にだけ入る
 - `~/.claude/settings.json` の既定のモデルを Sonnet にする

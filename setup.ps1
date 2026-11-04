@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 $keyName = 'ANTHROPIC_API_KEY'            # 旧版(ターミナル版)が環境変数に登録していた名前
 $minDesktopVersion = [version]'3.1623.1'  # これより前の版には「Use your Claude API account」が無い
 $downloadPage = 'https://claude.com/download'
+$script:InstalledVia = $null   # winget で入れたら 'winget'
 
 function Write-Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "   OK: $msg" -ForegroundColor Green }
@@ -87,36 +88,14 @@ function Get-InstallerUrl([string]$Arch) {
     return "https://claude.ai/api/desktop/win32/$Arch/setup/latest/redirect"
 }
 
-# $Dir に落として、リダイレクト先のファイル名(.exe / .msix)で置く
-function Save-ClaudeInstaller([string]$Url, [string]$Dir) {
-    New-Item -ItemType Directory -Force $Dir | Out-Null
-    $part = Join-Path $Dir 'download.part'
-    $ProgressPreference = 'SilentlyContinue'   # 5.1 は進み具合の表示で極端に遅くなる
-    $res = Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing -PassThru -TimeoutSec 900
-    $name = 'ClaudeSetup.exe'
-    try {
-        $leaf = [Uri]::UnescapeDataString([IO.Path]::GetFileName($res.BaseResponse.ResponseUri.AbsolutePath))
-        if ($leaf -match '^[\w.\-]+\.(exe|msix|msixbundle)$') { $name = $leaf }
-    } catch { }
-    $out = Join-Path $Dir $name
-    Move-Item -LiteralPath $part -Destination $out -Force
-    return $out
-}
-
-function Test-AnthropicSignature([string]$Path) {
-    $sig = Get-AuthenticodeSignature -FilePath $Path
-    if ($sig.Status -ne 'Valid' -or -not $sig.SignerCertificate) { return $false }
-    return ($sig.SignerCertificate.Subject -match '(^|,\s*)CN="?Anthropic, PBC"?(,|$)')
-}
-
-# 入るまで待つ。PollCount 回(5 秒おき)見て、だめなら Enter を待って見直す
-function Wait-ClaudeDesktop([int]$PollCount = 24) {
+# 入るまで待つ。PollCount 回(5 秒おき)見て、だめなら PromptCount 回 Enter を待って見直す
+function Wait-ClaudeDesktop([int]$PollCount = 24, [int]$PromptCount = 2) {
     for ($i = 0; $i -lt $PollCount; $i++) {
         $app = Find-ClaudeDesktop
         if ($app) { return $app }
         Start-Sleep -Seconds 5
     }
-    for ($i = 0; $i -lt 2; $i++) {
+    for ($i = 0; $i -lt $PromptCount; $i++) {
         $null = Read-Host '   インストールが終わったら、この画面で Enter を押してください'
         $app = Find-ClaudeDesktop
         if ($app) { return $app }
@@ -125,44 +104,60 @@ function Wait-ClaudeDesktop([int]$PollCount = 24) {
     return $null
 }
 
+# winget-pkgs の Anthropic.Claude は msix(Scope 無し)と exe(Scope: user、--silent)を持つ。
+# 管理者権限なしで入るよう、ユーザー単位の exe を指定する
+function Get-WingetArgs {
+    return @('install', '--id', 'Anthropic.Claude', '-e', '--silent',
+        '--scope', 'user', '--installer-type', 'exe', '--source', 'winget',
+        '--accept-source-agreements', '--accept-package-agreements')
+}
+
+function Install-ClaudeWithWinget {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Note 'winget が無いので、別の方法で入れます。'
+        return $null
+    }
+    Write-Host '   winget で入れます(数分かかることがあります)'
+    $code = $null
+    try {
+        $wingetArgs = Get-WingetArgs
+        winget @wingetArgs | Out-Host
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Note "winget を動かせませんでした($($_.Exception.Message))"
+        return $null
+    }
+    $app = Wait-ClaudeDesktop -PollCount 6 -PromptCount 0
+    if (-not $app) { Write-Note "winget では入りませんでした(終了コード $code)。" }
+    return $app
+}
+
 function Request-ManualInstall([string]$Arch) {
-    $which = if ($Arch -eq 'arm64') { 'Windows の ARM64 版' } else { 'Windows 版' }
-    Write-Note '自動では入れられないので、ブラウザでダウンロードのページを開きます。'
-    Write-Host "   1. 開いたページで$($which)をダウンロードする"
+    Write-Note '自動では入れられないので、ブラウザでインストーラを開きます。'
+    $opened = $false
+    if ($Arch) {
+        try { Start-Process (Get-InstallerUrl $Arch); $opened = $true } catch { }
+    }
+    if (-not $opened) {
+        try { Start-Process $downloadPage; $opened = $true } catch { }
+    }
+    Write-Host '   1. ブラウザでダウンロードが終わるのを待つ(ページが開いたときは、Windows 版を選んでダウンロードする)'
     Write-Host '   2. ダウンロードしたファイルを開いてインストールする'
     Write-Host '   3. 終わったら、この画面に戻って Enter を押す'
-    Write-Host "   (ページが開かないときは、ブラウザで $downloadPage を開く)"
-    try { Start-Process $downloadPage } catch { }
+    if (-not $opened) { Write-Host "   (ブラウザが開かないときは、自分で $downloadPage を開く)" }
     return (Wait-ClaudeDesktop -PollCount 0)
 }
 
+# 1) winget 2) ブラウザで CPU に合うインストーラを開く。直接の取得は Cloudflare の 403 で止まるのでしない
 function Install-ClaudeDesktop {
+    $app = Install-ClaudeWithWinget
+    if ($app) {
+        $script:InstalledVia = 'winget'
+        return $app
+    }
     $arch = Get-CpuArch
-    if (-not $arch) {
-        Write-Note 'この PC の CPU の種類が分かりませんでした。'
-        return (Request-ManualInstall 'x64')
-    }
-    $dir = Join-Path $env:TEMP ('team-ai-setup-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    try {
-        Write-Host "   インストーラを取ってきます($arch 版。数分かかることがあります)"
-        $file = Save-ClaudeInstaller -Url (Get-InstallerUrl $arch) -Dir $dir
-    } catch {
-        Write-Note "インストーラを取ってこられませんでした($($_.Exception.Message))"
-        return (Request-ManualInstall $arch)
-    }
-    if (-not (Test-AnthropicSignature $file)) {
-        Write-Note '取ってきたファイルに Anthropic の署名が確かめられないので、実行しません。'
-        return (Request-ManualInstall $arch)
-    }
-    Write-Ok 'インストーラの署名を確かめました(Anthropic, PBC)。インストールの画面に進んでください。'
-    try {
-        Start-Process -FilePath $file -Wait
-    } catch {
-        Write-Note "インストーラを開けませんでした($($_.Exception.Message))"
-        return (Request-ManualInstall $arch)
-    }
-    Write-Host '   インストールが終わるのを待っています...'
-    return (Wait-ClaudeDesktop)
+    if (-not $arch) { Write-Note 'この PC の CPU の種類が分かりませんでした。' }
+    return (Request-ManualInstall $arch)
 }
 
 # ---- キー ----
@@ -246,8 +241,9 @@ if ($app) {
     }
     Write-Ok 'インストールを確かめました。'
 }
-if (Test-DesktopVersionOld $app.Version) {
-    Write-Note "アプリの版が古い($($app.Version))ので、開いたあと自動の更新が終わるまで少し待ってください。"
+if ((Test-DesktopVersionOld $app.Version) -or $script:InstalledVia -eq 'winget') {
+    $verText = if ($app.Version) { "($($app.Version))" } else { '(winget で入る版)' }
+    Write-Note "アプリの版が古い$($verText)ので、開いたあと自動の更新が終わるまで少し待ってください。"
 }
 
 # 2. キーの入力と確認
