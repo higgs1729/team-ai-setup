@@ -1,38 +1,32 @@
 # 手順メモ
 
-デスクトップアプリ(Code タブ)を API キーで使う版。2026-11-04 に作り替えた。
+ChatGPT デスクトップアプリ(Codex 入り)を OpenAI の API キーで使う版。2026-11-04 に Claude 版(タグ claude-v2)から作り替えた。
 
 ## 前提(公式)
 
-- デスクトップは `ANTHROPIC_API_KEY` を読まない: https://code.claude.com/docs/en/authentication
-- 3.1623.1 以降はサインイン画面から「Use your Claude API account」でキーを入れられる: https://claude.com/docs/third-party/claude-desktop/claude-api
-- インストーラ: `https://claude.ai/api/desktop/win32/{x64|arm64}/setup/latest/redirect`
-- worktree のセッションには Git が要る: https://code.claude.com/docs/en/desktop (Git and Git LFS errors)
-- API キー(3P)で使えないもの: https://claude.com/docs/third-party/claude-desktop/feature-matrix
-- 旧来の .exe で入れると Cowork が無い(Code タブには触れていない): https://claude.com/docs/third-party/claude-desktop/installation
+- API キーでのサインイン: サインアウトの画面で「Sign in another way」→ キー → 「Continue」。ログアウトはプロフィールのメニューの「Log out」: https://learn.chatgpt.com/docs/auth.md
+- API キーでは、ワークスペースやクラウドに頼る機能が一部使えない。Codex のクラウドは ChatGPT でのサインインが要る。プラグインの一部は使えない。料金は API の従量: 同上
+- 導入: `winget install --id 9PLM9XGG6VKS -s msstore`、ブラウザなら https://get.microsoft.com/installer/download/9PLM9XGG6VKS 。Git が無いと一部の機能が使えない: https://learn.chatgpt.com/docs/windows/windows-app.md
+- Store を通らない MSIX: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-{x64|arm64}.msix`。公式の手順は管理者での `Add-AppxProvisionedPackage`(ライセンス XML 付き)だけ: https://learn.chatgpt.com/docs/enterprise/windows-deployment
+- 「Codex を選ぶ」は quickstart の "select Codex from the ChatGPT dropdown": https://learn.chatgpt.com/docs/quickstart.md
 
-## 入れ方の順
+## 判定と入れ方
 
-1. winget: `winget install --id Anthropic.Claude -e --silent --scope user --installer-type exe --source winget --accept-source-agreements --accept-package-agreements`
-   - manifest(winget-pkgs `manifests/a/Anthropic/Claude/2.42304.2/Anthropic.Claude.installer.yaml`)は x64・arm64 とも msix と exe を持つ。msix は Scope の指定が無く、packagedServices・localSystemServices を含む(入れるのに管理者が要りそう、未確認)。exe は `Scope: user`・`Silent: --silent`・`ProductCode: AnthropicClaude`
-   - そのため `--scope user --installer-type exe` を付ける。入り先は `%LOCALAPPDATA%\AnthropicClaude\claude.exe`(判定の 2 番目で拾う)
-   - 版は 2.42304.2 と古い。起動後の自動更新を待つ前提で「版が古い」の案内を出す
-2. winget が無い・失敗: ブラウザで CPU に合う上の URL を開く(開けなければ https://claude.com/download)。Enter を待って判定し直す
-- 直接の取得はしない。PS 5.1 の `Invoke-WebRequest` は x64・arm64 とも 403(`cf-mitigated: challenge`)だった
+- 判定: `Get-AppxPackage -Name OpenAI.Codex` の発行元が `CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B` のもの(この PC の実物: Family `OpenAI.Codex_2p2nqsd0c76g0`、版 26.1027.3384.0、表示名 ChatGPT)。次にスタートメニューの AppID が `OpenAI.Codex_2p2nqsd0c76g0!*` のもの。表示名(ChatGPT)だけでは見ない
+- 起動: `explorer.exe shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App`
+- 入れ方の順: winget(`--accept-source-agreements --accept-package-agreements` 付き)→ `Add-AppxPackage -Path <MSIX の URL>`(管理者なし。1 GB ほど)→ ブラウザで get.microsoft.com を開いて手で
 
-## 確かめたこと(Windows 11 x64、PowerShell 5.1.26100、winget v1.29.380、Claude MSIX 4.4212.0.0)
+## 確かめたこと(Windows 11 x64、PowerShell 5.1.26100)
 
 - 構文: `[System.Management.Automation.Language.Parser]::ParseFile` でエラー 0
-- 試験: `. .\setup.ps1 -LoadOnly` で関数を読み、`winget` `Start-Process` `Set-Clipboard` `Read-Host` `Get-AppxPackage` `Get-StartApps` `Invoke-RestMethod` を同名の関数で差し替えて試す。winget 版は 38 件通過(winget 成功 / 0 以外でも入っていれば使う / 失敗 / 例外 / 無し / 直リンクが開けない / CPU 不明、通しの実行 3 通り)。本物の winget.exe が見えている状態では入れる処理を呼ばない見張りを付けた。winget・インストーラ・アプリの起動・クリップボード・環境変数・本人の settings.json には触れていない
-- 判定: `Get-AppxPackage -Name Claude`(発行元 Anthropic)で拾える。起動は `explorer.exe shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude`
-- キーの確認: 偽のキーで `/v1/models` が 401 になり、クリップボードにもアプリにも進まない(前回の試験)
+- 試験: `. .\setup.ps1 -LoadOnly` で関数を読み、`winget` `Add-AppxPackage` `Start-Process` `Set-Clipboard` `Read-Host` `Get-AppxPackage` `Get-StartApps` `Invoke-RestMethod` を同名の関数で差し替えて 42 件通過。本物の winget・Add-AppxPackage が見えている状態では入れる処理を呼ばない見張り付き。インストール・アプリの起動・クリップボード・環境変数・~/.codex には触れていない
+- キーの確認: 偽のキーで `GET https://api.openai.com/v1/models`(Bearer)が 401 になり、クリップボードにもアプリにも進まない
+- MSIX の URL は HEAD で 200(x64 1,003,521,886 バイト、arm64 1,076,519,636 バイト)
 
-## 実機待ち
+## 実機待ち(未確認)
 
-- アプリの無い PC で: winget で入る → 自動更新で 3.1623.1 以上になる → 「Use your Claude API account」→ 貼り付け → Code タブで動くか
-- exe(旧来の入れ方)の版が今も自動更新されるか。exe で Code タブが使えるか
-- 古い winget(`--installer-type` が無い版)では失敗してブラウザの流れに落ちる
-- ブラウザで直リンクを開くと、Cloudflare を通ってダウンロードが始まるか
-- settings.json の `model: sonnet` が Code タブの既定に効くか(効かなくても画面で選ぶ案内がある)
-- サインアウトの表示の場所と名前、サインアウトでアプリ内のキーが消えるか
-- remove.cmd の環境変数の削除と、`Set-Clipboard -Value ' '` でキーが消えるか(どちらもモックだけ)
+- アプリの無い PC での一通り: 入る → 「Sign in another way」→ 貼り付け → 「Continue」→ Codex → フォルダを開く
+- 画面の文言のうち公式に無いもの: キーの欄の名前、フォルダを開くボタンの名前、ドロップダウンの位置(「上の」)
+- 管理者でない利用者が Store 署名の MSIX を `Add-AppxPackage` で入れられるか(公式の手順は管理者でのプロビジョニングだけ)
+- Store が無効な PC で winget(msstore)がどう失敗するか
+- `Set-Clipboard -Value ' '` でキーが消えるか、remove.cmd の環境変数の削除(どちらもモックだけ)
